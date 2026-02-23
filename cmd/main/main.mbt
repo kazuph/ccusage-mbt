@@ -113,15 +113,47 @@ fn week_start(d : Int) -> Int {
 }
 
 fn pricing(model : String) -> (Double, Double, Double, Double) {
-  if model.contains("opus") { (15.0, 75.0, 18.75, 1.5) }
+  if model.contains("opus-4-6") { (5.0, 25.0, 6.25, 0.5) }
+  else if model.contains("opus-4-5") { (5.0, 25.0, 6.25, 0.5) }
+  else if model.contains("opus") { (15.0, 75.0, 18.75, 1.5) }
   else if model.contains("sonnet") { (3.0, 15.0, 3.75, 0.3) }
-  else if model.contains("haiku") { (0.8, 4.0, 1.0, 0.08) }
+  else if model.contains("haiku") { (1.0, 5.0, 1.25, 0.1) }
   else { (0.0, 0.0, 0.0, 0.0) }
+}
+
+fn tiered_pricing(model : String) -> (Double, Double, Double, Double) {
+  if model.contains("opus-4-6") { (10.0, 37.5, 12.5, 1.0) }
+  else if model.contains("sonnet") { (6.0, 22.5, 7.5, 0.6) }
+  else { (0.0, 0.0, 0.0, 0.0) }
+}
+
+fn calculate_tiered_cost(
+  total_tokens : Int,
+  base_price_per_m : Double,
+  tiered_price_per_m : Double,
+  threshold : Int
+) -> Double {
+  if total_tokens > threshold && tiered_price_per_m > 0.0 {
+    let below = if total_tokens < threshold { total_tokens } else { threshold }
+    let above = total_tokens - below
+    (below.to_double() * base_price_per_m + above.to_double() * tiered_price_per_m) / 1000000.0
+  } else {
+    total_tokens.to_double() * base_price_per_m / 1000000.0
+  }
 }
 
 fn calc_cost(model : String, inp : Int, out : Int, cc : Int, cr : Int) -> Double {
   let (ir, or, ccr, crr) = pricing(model)
-  (inp.to_double() * ir + out.to_double() * or + cc.to_double() * ccr + cr.to_double() * crr) / 1000000.0
+  let (tir, tor, tccr, tcrr) = tiered_pricing(model)
+  if tir > 0.0 || tor > 0.0 {
+    let threshold = 200000
+    calculate_tiered_cost(inp, ir, tir, threshold) +
+    calculate_tiered_cost(out, or, tor, threshold) +
+    calculate_tiered_cost(cc, ccr, tccr, threshold) +
+    calculate_tiered_cost(cr, crr, tcrr, threshold)
+  } else {
+    (inp.to_double() * ir + out.to_double() * or + cc.to_double() * ccr + cr.to_double() * crr) / 1000000.0
+  }
 }
 
 // Codex (GPT-5.3) cost: inp=$1.25, cached=$0.125, out+reasoning=$10.00 per 1M

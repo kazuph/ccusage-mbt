@@ -208,13 +208,22 @@ ccusage-mbt daily --json --since 20260223 --until 20260223
 
 ## Pricing Models
 
-### Claude Code (API Equivalent)
+### Claude Code (Standard)
 
 | Model | Input | Output | Cache Creation | Cache Read |
 |-------|-------|--------|----------------|------------|
-| claude-opus-4 | $15.00/M | $75.00/M | $18.75/M | $1.50/M |
-| claude-sonnet-4 | $3.00/M | $15.00/M | $3.75/M | $0.30/M |
-| claude-haiku-4 | $0.80/M | $4.00/M | $1.00/M | $0.08/M |
+| claude-opus-4, opus-4-1 | $15.00/M | $75.00/M | $18.75/M | $1.50/M |
+| claude-opus-4-5 | $5.00/M | $25.00/M | $6.25/M | $0.50/M |
+| claude-opus-4-6 | $5.00/M | $25.00/M | $6.25/M | $0.50/M |
+| claude-sonnet-4/4-5/4-6 | $3.00/M | $15.00/M | $3.75/M | $0.30/M |
+| claude-haiku-4-5 | $1.00/M | $5.00/M | $1.25/M | $0.10/M |
+
+### Claude Code (Tiered — 200K+ tokens per request)
+
+| Model | Input | Output | Cache Creation | Cache Read |
+|-------|-------|--------|----------------|------------|
+| claude-opus-4-6 | $10.00/M | $37.50/M | $12.50/M | $1.00/M |
+| claude-sonnet-4/4-5/4-6 | $6.00/M | $22.50/M | $7.50/M | $0.60/M |
 
 ### Codex (API Equivalent)
 
