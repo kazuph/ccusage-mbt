@@ -1,0 +1,10 @@
+import {
+  "moonbitlang/x/fs" @fs,
+  "moonbitlang/x/sys" @sys,
+  "moonbitlang/core/json" @json,
+}
+
+options(
+  "is-main": true,
+  "native-stub": ["native_helper.c"],
+)
