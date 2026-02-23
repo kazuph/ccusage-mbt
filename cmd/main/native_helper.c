@@ -138,3 +138,29 @@ int c_is_eof(void) {
 void c_close_file(void) {
     if (current_file) { fclose(current_file); current_file = NULL; }
 }
+
+// Extract substring from MoonBit string (UTF-16 code unit level)
+moonbit_string_t c_substring(moonbit_string_t str, int32_t start, int32_t end) {
+    int32_t len = end - start;
+    if (len <= 0) return moonbit_make_string(0, 0);
+    moonbit_string_t result = moonbit_make_string(len, 0);
+    for (int32_t i = 0; i < len; i++) {
+        result[i] = str[start + i];
+    }
+    return result;
+}
+
+// Return day of week (0=Sunday) for a local YYYYMMDD date
+int c_day_of_week(int yyyymmdd) {
+    int y = yyyymmdd / 10000;
+    int m = (yyyymmdd % 10000) / 100;
+    int d = yyyymmdd % 100;
+    struct tm tm;
+    memset(&tm, 0, sizeof(tm));
+    tm.tm_year = y - 1900;
+    tm.tm_mon = m - 1;
+    tm.tm_mday = d;
+    tm.tm_hour = 12;
+    mktime(&tm);
+    return tm.tm_wday;
+}
