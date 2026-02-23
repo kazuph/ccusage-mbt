@@ -22,6 +22,23 @@ extern "C" fn c_day_of_week(yyyymmdd : Int) -> Int = "c_day_of_week"
 #borrow(s)
 extern "C" fn c_substring(s : String, start : Int, end_ : Int) -> String = "c_substring"
 
+// Fast Claude Code parser (extracts fields in C, skips full JSON parse)
+extern "C" fn c_fast_read_claude(since : Int, until : Int) -> Int = "c_fast_read_claude"
+extern "C" fn c_get_model() -> String = "c_get_model"
+extern "C" fn c_get_inp() -> Int = "c_get_inp"
+extern "C" fn c_get_out() -> Int = "c_get_out"
+extern "C" fn c_get_cc() -> Int = "c_get_cc"
+extern "C" fn c_get_cr() -> Int = "c_get_cr"
+extern "C" fn c_dedup_reset() -> Unit = "c_dedup_reset"
+
+// Codex session reader (tail-read for last token_count)
+#borrow(path)
+extern "C" fn c_read_codex_session(path : String, path_len : Int) -> Int = "c_read_codex_session"
+extern "C" fn c_codex_inp() -> Int = "c_codex_inp"
+extern "C" fn c_codex_cached() -> Int = "c_codex_cached"
+extern "C" fn c_codex_out() -> Int = "c_codex_out"
+extern "C" fn c_codex_reasoning() -> Int = "c_codex_reasoning"
+
 fn parse_int_at(s : String, start : Int, len : Int) -> Int {
   let mut result = 0
   let mut i = start
@@ -105,6 +122,12 @@ fn pricing(model : String) -> (Double, Double, Double, Double) {
 fn calc_cost(model : String, inp : Int, out : Int, cc : Int, cr : Int) -> Double {
   let (ir, or, ccr, crr) = pricing(model)
   (inp.to_double() * ir + out.to_double() * or + cc.to_double() * ccr + cr.to_double() * crr) / 1000000.0
+}
+
+// Codex (GPT-5.3) cost: inp=$1.25, cached=$0.125, out+reasoning=$10.00 per 1M
+fn calc_codex_cost(inp : Int, cached : Int, out : Int, reasoning : Int) -> Double {
+  let uncached = if inp > cached { inp - cached } else { 0 }
+  (uncached.to_double() * 1.25 + cached.to_double() * 0.125 + (out + reasoning).to_double() * 10.0) / 1000000.0
 }
 
 fn jget(j : Json, k : String) -> Json? {
@@ -216,167 +239,7 @@ fn extract_session_key(path : String, projects_dir : String) -> (String, String)
   } else { ("Unknown Project", "unknown") }
 }
 
-fn process_line(line : String, since : Int, until : Int, seen : Map[String, Unit]) -> (String, Int, Int, Int, Int, Int, String)? {
-  let json = try { @json.parse(line) } catch { _ => return None }
-  let ts = jstr(json, "timestamp")
-  if ts == "" { return None }
-  let message = match jget(json, "message") { Some(m) => m; None => return None }
-  let usage = match jget(message, "usage") { Some(u) => u; None => return None }
-  let mid = jstr(message, "id")
-  let rid = jstr(json, "requestId")
-  if mid != "" || rid != "" {
-    let key = mid + ":" + rid
-    match seen.get(key) { Some(_) => return None; None => seen[key] = () }
-  }
-  let model = jstr(message, "model")
-  if model == "" { return None }
-  let inp = jint(usage, "input_tokens")
-  let out = jint(usage, "output_tokens")
-  let cc = jint(usage, "cache_creation_input_tokens")
-  let cr = jint(usage, "cache_read_input_tokens")
-  let date = ts_to_date(ts)
-  if date == 0 || date < since || date > until { return None }
-  Some((model, date, inp, out, cc, cr, ts))
-}
-
-fn process_file_daily(path : String, buckets : Map[Int, BucketAcc], since : Int, until : Int, seen : Map[String, Unit]) -> Unit {
-  let mtime = c_file_mtime_date(path, path.length())
-  if mtime > 0 && mtime < since { return }
-  if c_open_file(path, path.length()) == 0 { return }
-  while c_is_eof() == 0 {
-    let line = c_read_line_ffi()
-    if line.is_empty() { continue }
-    match process_line(line, since, until, seen) {
-      Some((model, date, inp, out, cc, cr, _ts)) => {
-        let cost = calc_cost(model, inp, out, cc, cr)
-        let bucket = match buckets.get(date) { Some(b) => b; None => { let b = new_bucket(); buckets[date] = b; b } }
-        acc_add(bucket, model, inp, out, cc, cr, cost)
-      }
-      None => ()
-    }
-  }
-}
-
-fn process_file_monthly(path : String, buckets : Map[String, BucketAcc], since : Int, until : Int, seen : Map[String, Unit]) -> Unit {
-  let mtime = c_file_mtime_date(path, path.length())
-  if mtime > 0 && mtime < since { return }
-  if c_open_file(path, path.length()) == 0 { return }
-  while c_is_eof() == 0 {
-    let line = c_read_line_ffi()
-    if line.is_empty() { continue }
-    match process_line(line, since, until, seen) {
-      Some((model, date, inp, out, cc, cr, _ts)) => {
-        let cost = calc_cost(model, inp, out, cc, cr)
-        let key = month_str(date)
-        let bucket = match buckets.get(key) { Some(b) => b; None => { let b = new_bucket(); buckets[key] = b; b } }
-        acc_add(bucket, model, inp, out, cc, cr, cost)
-      }
-      None => ()
-    }
-  }
-}
-
-fn process_file_weekly(path : String, buckets : Map[String, BucketAcc], since : Int, until : Int, seen : Map[String, Unit]) -> Unit {
-  let mtime = c_file_mtime_date(path, path.length())
-  if mtime > 0 && mtime < since { return }
-  if c_open_file(path, path.length()) == 0 { return }
-  while c_is_eof() == 0 {
-    let line = c_read_line_ffi()
-    if line.is_empty() { continue }
-    match process_line(line, since, until, seen) {
-      Some((model, date, inp, out, cc, cr, _ts)) => {
-        let cost = calc_cost(model, inp, out, cc, cr)
-        let ws = week_start(date)
-        let key = date_str(ws)
-        let bucket = match buckets.get(key) { Some(b) => b; None => { let b = new_bucket(); buckets[key] = b; b } }
-        acc_add(bucket, model, inp, out, cc, cr, cost)
-      }
-      None => ()
-    }
-  }
-}
-
-// process_line variant without date filtering (for session mode)
-fn process_line_nodate(line : String, seen : Map[String, Unit]) -> (String, Int, Int, Int, Int, Int, String)? {
-  let json = try { @json.parse(line) } catch { _ => return None }
-  let ts = jstr(json, "timestamp")
-  if ts == "" { return None }
-  let message = match jget(json, "message") { Some(m) => m; None => return None }
-  let usage = match jget(message, "usage") { Some(u) => u; None => return None }
-  let mid = jstr(message, "id")
-  let rid = jstr(json, "requestId")
-  if mid != "" || rid != "" {
-    let key = mid + ":" + rid
-    match seen.get(key) { Some(_) => return None; None => seen[key] = () }
-  }
-  let model = jstr(message, "model")
-  if model == "" { return None }
-  let inp = jint(usage, "input_tokens")
-  let out = jint(usage, "output_tokens")
-  let cc = jint(usage, "cache_creation_input_tokens")
-  let cr = jint(usage, "cache_read_input_tokens")
-  let date = ts_to_date(ts)
-  Some((model, date, inp, out, cc, cr, ts))
-}
-
-fn process_file_session(path : String, sessions : Map[String, SessionAcc], projects_dir : String, _since : Int, _until : Int, seen : Map[String, Unit]) -> Unit {
-  // No mtime skip for session mode — we need lifetime totals
-  let (project_path, session_id) = extract_session_key(path, projects_dir)
-  let session_key = project_path + "/" + session_id
-  if c_open_file(path, path.length()) == 0 { return }
-  while c_is_eof() == 0 {
-    let line = c_read_line_ffi()
-    if line.is_empty() { continue }
-    match process_line_nodate(line, seen) {
-      Some((model, date, inp, out, cc, cr, _ts)) => {
-        let cost = calc_cost(model, inp, out, cc, cr)
-        let sess = match sessions.get(session_key) {
-          Some(s) => s
-          None => {
-            let s : SessionAcc = { inp: 0L, out: 0L, cc: 0L, cr: 0L, cost: 0.0, models: Map::new(), last_date: 0, project_path, session_id }
-            sessions[session_key] = s; s
-          }
-        }
-        sess.inp = sess.inp + inp.to_int64()
-        sess.out = sess.out + out.to_int64()
-        sess.cc = sess.cc + cc.to_int64()
-        sess.cr = sess.cr + cr.to_int64()
-        sess.cost = sess.cost + cost
-        if date > sess.last_date { sess.last_date = date }
-        let ma = match sess.models.get(model) {
-          Some(a) => a
-          None => { let a : ModelAcc = { inp: 0L, out: 0L, cc: 0L, cr: 0L, cost: 0.0 }; sess.models[model] = a; a }
-        }
-        ma.inp = ma.inp + inp.to_int64()
-        ma.out = ma.out + out.to_int64()
-        ma.cc = ma.cc + cc.to_int64()
-        ma.cr = ma.cr + cr.to_int64()
-        ma.cost = ma.cost + cost
-      }
-      None => ()
-    }
-  }
-}
-
-fn process_file_instances(path : String, project_days : Map[String, Map[Int, BucketAcc]], projects_dir : String, since : Int, until : Int, seen : Map[String, Unit]) -> Unit {
-  let mtime = c_file_mtime_date(path, path.length())
-  if mtime > 0 && mtime < since { return }
-  let project = extract_project(path, projects_dir)
-  if c_open_file(path, path.length()) == 0 { return }
-  while c_is_eof() == 0 {
-    let line = c_read_line_ffi()
-    if line.is_empty() { continue }
-    match process_line(line, since, until, seen) {
-      Some((model, date, inp, out, cc, cr, _ts)) => {
-        let cost = calc_cost(model, inp, out, cc, cr)
-        let days = match project_days.get(project) { Some(d) => d; None => { let d : Map[Int, BucketAcc] = Map::new(); project_days[project] = d; d } }
-        let bucket = match days.get(date) { Some(b) => b; None => { let b = new_bucket(); days[date] = b; b } }
-        acc_add(bucket, model, inp, out, cc, cr, cost)
-      }
-      None => ()
-    }
-  }
-}
+// Old process_line/process_file_* functions removed — replaced by fast C-level extraction above
 
 fn scan_dir_generic(dir : String, projects_dir : String, project_filter : String, handler : (String) -> Unit) -> Unit {
   let entries = try { @fs.read_dir(dir) } catch { _ => return }
@@ -394,6 +257,314 @@ fn scan_dir_generic(dir : String, projects_dir : String, project_filter : String
       handler(path)
     }
     i = i + 1
+  }
+}
+
+// ============================================================
+// Fast Claude Code processors (C-level field extraction)
+// ============================================================
+
+fn process_file_daily_fast(path : String, buckets : Map[Int, BucketAcc], since : Int, until : Int) -> Unit {
+  let mtime = c_file_mtime_date(path, path.length())
+  if mtime > 0 && mtime < since { return }
+  if c_open_file(path, path.length()) == 0 { return }
+  while true {
+    let date = c_fast_read_claude(since, until)
+    if date == 0 { break }
+    let model = c_get_model()
+    let inp = c_get_inp()
+    let out = c_get_out()
+    let cc = c_get_cc()
+    let cr = c_get_cr()
+    let cost = calc_cost(model, inp, out, cc, cr)
+    let bucket = match buckets.get(date) { Some(b) => b; None => { let b = new_bucket(); buckets[date] = b; b } }
+    acc_add(bucket, model, inp, out, cc, cr, cost)
+  }
+}
+
+fn process_file_monthly_fast(path : String, buckets : Map[String, BucketAcc], since : Int, until : Int) -> Unit {
+  let mtime = c_file_mtime_date(path, path.length())
+  if mtime > 0 && mtime < since { return }
+  if c_open_file(path, path.length()) == 0 { return }
+  while true {
+    let date = c_fast_read_claude(since, until)
+    if date == 0 { break }
+    let model = c_get_model()
+    let inp = c_get_inp()
+    let out = c_get_out()
+    let cc = c_get_cc()
+    let cr = c_get_cr()
+    let cost = calc_cost(model, inp, out, cc, cr)
+    let key = month_str(date)
+    let bucket = match buckets.get(key) { Some(b) => b; None => { let b = new_bucket(); buckets[key] = b; b } }
+    acc_add(bucket, model, inp, out, cc, cr, cost)
+  }
+}
+
+fn process_file_weekly_fast(path : String, buckets : Map[String, BucketAcc], since : Int, until : Int) -> Unit {
+  let mtime = c_file_mtime_date(path, path.length())
+  if mtime > 0 && mtime < since { return }
+  if c_open_file(path, path.length()) == 0 { return }
+  while true {
+    let date = c_fast_read_claude(since, until)
+    if date == 0 { break }
+    let model = c_get_model()
+    let inp = c_get_inp()
+    let out = c_get_out()
+    let cc = c_get_cc()
+    let cr = c_get_cr()
+    let cost = calc_cost(model, inp, out, cc, cr)
+    let ws = week_start(date)
+    let key = date_str(ws)
+    let bucket = match buckets.get(key) { Some(b) => b; None => { let b = new_bucket(); buckets[key] = b; b } }
+    acc_add(bucket, model, inp, out, cc, cr, cost)
+  }
+}
+
+fn process_file_session_fast(path : String, sessions : Map[String, SessionAcc], projects_dir : String) -> Unit {
+  let (project_path, session_id) = extract_session_key(path, projects_dir)
+  let session_key = project_path + "/" + session_id
+  if c_open_file(path, path.length()) == 0 { return }
+  while true {
+    let date = c_fast_read_claude(0, 99991231)
+    if date == 0 { break }
+    let model = c_get_model()
+    let inp = c_get_inp()
+    let out = c_get_out()
+    let cc = c_get_cc()
+    let cr = c_get_cr()
+    let cost = calc_cost(model, inp, out, cc, cr)
+    let sess = match sessions.get(session_key) {
+      Some(s) => s
+      None => {
+        let s : SessionAcc = { inp: 0L, out: 0L, cc: 0L, cr: 0L, cost: 0.0, models: Map::new(), last_date: 0, project_path, session_id }
+        sessions[session_key] = s; s
+      }
+    }
+    sess.inp = sess.inp + inp.to_int64()
+    sess.out = sess.out + out.to_int64()
+    sess.cc = sess.cc + cc.to_int64()
+    sess.cr = sess.cr + cr.to_int64()
+    sess.cost = sess.cost + cost
+    if date > sess.last_date { sess.last_date = date }
+    let ma = match sess.models.get(model) {
+      Some(a) => a
+      None => { let a : ModelAcc = { inp: 0L, out: 0L, cc: 0L, cr: 0L, cost: 0.0 }; sess.models[model] = a; a }
+    }
+    ma.inp = ma.inp + inp.to_int64()
+    ma.out = ma.out + out.to_int64()
+    ma.cc = ma.cc + cc.to_int64()
+    ma.cr = ma.cr + cr.to_int64()
+    ma.cost = ma.cost + cost
+  }
+}
+
+fn process_file_instances_fast(path : String, project_days : Map[String, Map[Int, BucketAcc]], projects_dir : String, since : Int, until : Int) -> Unit {
+  let mtime = c_file_mtime_date(path, path.length())
+  if mtime > 0 && mtime < since { return }
+  let project = extract_project(path, projects_dir)
+  if c_open_file(path, path.length()) == 0 { return }
+  while true {
+    let date = c_fast_read_claude(since, until)
+    if date == 0 { break }
+    let model = c_get_model()
+    let inp = c_get_inp()
+    let out = c_get_out()
+    let cc = c_get_cc()
+    let cr = c_get_cr()
+    let cost = calc_cost(model, inp, out, cc, cr)
+    let days = match project_days.get(project) { Some(d) => d; None => { let d : Map[Int, BucketAcc] = Map::new(); project_days[project] = d; d } }
+    let bucket = match days.get(date) { Some(b) => b; None => { let b = new_bucket(); days[date] = b; b } }
+    acc_add(bucket, model, inp, out, cc, cr, cost)
+  }
+}
+
+// ============================================================
+// Codex session scanning + processing
+// ============================================================
+
+fn scan_codex_daily(sessions_dir : String, buckets : Map[Int, BucketAcc], since : Int, until : Int) -> Unit {
+  let since_y = since / 10000
+  let until_y = until / 10000
+  let years = try { @fs.read_dir(sessions_dir) } catch { _ => return }
+  let mut yi = 0
+  while yi < years.length() {
+    let y_str = years[yi]
+    yi = yi + 1
+    if y_str.length() != 4 { continue }
+    let y = parse_int_at(y_str, 0, 4)
+    if y < since_y || y > until_y { continue }
+    let y_dir = sessions_dir + "/" + y_str
+    let months = try { @fs.read_dir(y_dir) } catch { _ => continue }
+    let mut mi = 0
+    while mi < months.length() {
+      let m_str = months[mi]
+      mi = mi + 1
+      if m_str.length() != 2 { continue }
+      let m = parse_int_at(m_str, 0, 2)
+      let ym = y * 100 + m
+      let since_ym = (since / 100) % 1000000
+      let until_ym = (until / 100) % 1000000
+      if ym < since_ym || ym > until_ym { continue }
+      let m_dir = y_dir + "/" + m_str
+      let days = try { @fs.read_dir(m_dir) } catch { _ => continue }
+      let mut di = 0
+      while di < days.length() {
+        let d_str = days[di]
+        di = di + 1
+        if d_str.length() != 2 { continue }
+        let d = parse_int_at(d_str, 0, 2)
+        let date = y * 10000 + m * 100 + d
+        if date < since || date > until { continue }
+        let d_dir = m_dir + "/" + d_str
+        let files = try { @fs.read_dir(d_dir) } catch { _ => continue }
+        let mut fi = 0
+        while fi < files.length() {
+          let fname = files[fi]
+          fi = fi + 1
+          if fname.has_suffix(".jsonl") {
+            let fpath = d_dir + "/" + fname
+            let rd = c_read_codex_session(fpath, fpath.length())
+            if rd > 0 {
+              let inp = c_codex_inp()
+              let cached = c_codex_cached()
+              let out = c_codex_out()
+              let reasoning = c_codex_reasoning()
+              let cost = calc_codex_cost(inp, cached, out, reasoning)
+              let model = "gpt-5.3-codex"
+              let bucket = match buckets.get(date) { Some(b) => b; None => { let b = new_bucket(); buckets[date] = b; b } }
+              // Map Codex fields to Claude-compatible fields:
+              // inp=uncached input, out=output+reasoning, cc=0, cr=cached_input
+              let uncached = if inp > cached { inp - cached } else { 0 }
+              acc_add(bucket, model, uncached, out + reasoning, 0, cached, cost)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn scan_codex_monthly(sessions_dir : String, buckets : Map[String, BucketAcc], since : Int, until : Int) -> Unit {
+  let since_y = since / 10000
+  let until_y = until / 10000
+  let years = try { @fs.read_dir(sessions_dir) } catch { _ => return }
+  let mut yi = 0
+  while yi < years.length() {
+    let y_str = years[yi]
+    yi = yi + 1
+    if y_str.length() != 4 { continue }
+    let y = parse_int_at(y_str, 0, 4)
+    if y < since_y || y > until_y { continue }
+    let y_dir = sessions_dir + "/" + y_str
+    let months = try { @fs.read_dir(y_dir) } catch { _ => continue }
+    let mut mi = 0
+    while mi < months.length() {
+      let m_str = months[mi]
+      mi = mi + 1
+      if m_str.length() != 2 { continue }
+      let m = parse_int_at(m_str, 0, 2)
+      let ym = y * 100 + m
+      let since_ym = (since / 100) % 1000000
+      let until_ym = (until / 100) % 1000000
+      if ym < since_ym || ym > until_ym { continue }
+      let m_dir = y_dir + "/" + m_str
+      let days = try { @fs.read_dir(m_dir) } catch { _ => continue }
+      let mut di = 0
+      while di < days.length() {
+        let d_str = days[di]
+        di = di + 1
+        if d_str.length() != 2 { continue }
+        let d = parse_int_at(d_str, 0, 2)
+        let date = y * 10000 + m * 100 + d
+        if date < since || date > until { continue }
+        let d_dir = m_dir + "/" + d_str
+        let files = try { @fs.read_dir(d_dir) } catch { _ => continue }
+        let mut fi = 0
+        while fi < files.length() {
+          let fname = files[fi]
+          fi = fi + 1
+          if fname.has_suffix(".jsonl") {
+            let fpath = d_dir + "/" + fname
+            let rd = c_read_codex_session(fpath, fpath.length())
+            if rd > 0 {
+              let inp = c_codex_inp()
+              let cached = c_codex_cached()
+              let out = c_codex_out()
+              let reasoning = c_codex_reasoning()
+              let cost = calc_codex_cost(inp, cached, out, reasoning)
+              let model = "gpt-5.3-codex"
+              let key = month_str(date)
+              let bucket = match buckets.get(key) { Some(b) => b; None => { let b = new_bucket(); buckets[key] = b; b } }
+              let uncached = if inp > cached { inp - cached } else { 0 }
+              acc_add(bucket, model, uncached, out + reasoning, 0, cached, cost)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn scan_codex_weekly(sessions_dir : String, buckets : Map[String, BucketAcc], since : Int, until : Int) -> Unit {
+  let since_y = since / 10000
+  let until_y = until / 10000
+  let years = try { @fs.read_dir(sessions_dir) } catch { _ => return }
+  let mut yi = 0
+  while yi < years.length() {
+    let y_str = years[yi]
+    yi = yi + 1
+    if y_str.length() != 4 { continue }
+    let y = parse_int_at(y_str, 0, 4)
+    if y < since_y || y > until_y { continue }
+    let y_dir = sessions_dir + "/" + y_str
+    let months = try { @fs.read_dir(y_dir) } catch { _ => continue }
+    let mut mi = 0
+    while mi < months.length() {
+      let m_str = months[mi]
+      mi = mi + 1
+      if m_str.length() != 2 { continue }
+      let m = parse_int_at(m_str, 0, 2)
+      let ym = y * 100 + m
+      let since_ym = (since / 100) % 1000000
+      let until_ym = (until / 100) % 1000000
+      if ym < since_ym || ym > until_ym { continue }
+      let m_dir = y_dir + "/" + m_str
+      let days = try { @fs.read_dir(m_dir) } catch { _ => continue }
+      let mut di = 0
+      while di < days.length() {
+        let d_str = days[di]
+        di = di + 1
+        if d_str.length() != 2 { continue }
+        let d = parse_int_at(d_str, 0, 2)
+        let date = y * 10000 + m * 100 + d
+        if date < since || date > until { continue }
+        let d_dir = m_dir + "/" + d_str
+        let files = try { @fs.read_dir(d_dir) } catch { _ => continue }
+        let mut fi = 0
+        while fi < files.length() {
+          let fname = files[fi]
+          fi = fi + 1
+          if fname.has_suffix(".jsonl") {
+            let fpath = d_dir + "/" + fname
+            let rd = c_read_codex_session(fpath, fpath.length())
+            if rd > 0 {
+              let inp = c_codex_inp()
+              let cached = c_codex_cached()
+              let out = c_codex_out()
+              let reasoning = c_codex_reasoning()
+              let cost = calc_codex_cost(inp, cached, out, reasoning)
+              let model = "gpt-5.3-codex"
+              let ws = week_start(date)
+              let key = date_str(ws)
+              let bucket = match buckets.get(key) { Some(b) => b; None => { let b = new_bucket(); buckets[key] = b; b } }
+              let uncached = if inp > cached { inp - cached } else { 0 }
+              acc_add(bucket, model, uncached, out + reasoning, 0, cached, cost)
+            }
+          }
+        }
+      }
+    }
   }
 }
 
@@ -649,6 +820,7 @@ fn main {
   let mut project_filter = ""
   let mut instances = false
   let mut breakdown = false
+  let mut source = "all"  // claude, codex, all
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
@@ -659,16 +831,20 @@ fn main {
     else if arg == "--project" && i + 1 < args.length() { i = i + 1; project_filter = args[i] }
     else if arg == "--instances" || arg == "-i" { instances = true }
     else if arg == "--breakdown" || arg == "-b" { breakdown = true }
+    else if arg == "--source" && i + 1 < args.length() { i = i + 1; source = args[i] }
     else if arg[0] != '-' { subcmd = arg }
     i = i + 1
   }
   let home = match @sys.get_env_var("HOME") { Some(h) => h; None => { println("Error: HOME not set"); @sys.exit(1); "" } }
   let projects_dir = home + "/.claude/projects"
-  let seen : Map[String, Unit] = Map::new()
+  let codex_dir = home + "/.codex/sessions"
+  let scan_claude = source == "all" || source == "claude" || source == "cc"
+  let scan_codex = source == "all" || source == "codex"
+  c_dedup_reset()
   if subcmd == "daily" {
     if instances {
       let project_days : Map[String, Map[Int, BucketAcc]] = Map::new()
-      scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_instances(path, project_days, projects_dir, since, until, seen) })
+      if scan_claude { scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_instances_fast(path, project_days, projects_dir, since, until) }) }
       if json_mode { println(build_instances_json(project_days, order).stringify(indent=2)) }
       else {
         project_days.each(fn(proj, days) {
@@ -689,7 +865,8 @@ fn main {
       }
     } else {
       let buckets : Map[Int, BucketAcc] = Map::new()
-      scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_daily(path, buckets, since, until, seen) })
+      if scan_claude { scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_daily_fast(path, buckets, since, until) }) }
+      if scan_codex { scan_codex_daily(codex_dir, buckets, since, until) }
       if json_mode { println(build_daily_json(buckets, order).stringify(indent=2)) }
       else {
         print_table_header()
@@ -709,7 +886,8 @@ fn main {
     }
   } else if subcmd == "monthly" {
     let buckets : Map[String, BucketAcc] = Map::new()
-    scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_monthly(path, buckets, since, until, seen) })
+    if scan_claude { scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_monthly_fast(path, buckets, since, until) }) }
+    if scan_codex { scan_codex_monthly(codex_dir, buckets, since, until) }
     if json_mode { println(build_monthly_json(buckets, order).stringify(indent=2)) }
     else {
       print_table_header()
@@ -728,7 +906,8 @@ fn main {
     }
   } else if subcmd == "weekly" {
     let buckets : Map[String, BucketAcc] = Map::new()
-    scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_weekly(path, buckets, since, until, seen) })
+    if scan_claude { scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_weekly_fast(path, buckets, since, until) }) }
+    if scan_codex { scan_codex_weekly(codex_dir, buckets, since, until) }
     if json_mode { println(build_weekly_json(buckets, order).stringify(indent=2)) }
     else {
       print_table_header()
@@ -747,7 +926,7 @@ fn main {
     }
   } else if subcmd == "session" {
     let sessions : Map[String, SessionAcc] = Map::new()
-    scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_session(path, sessions, projects_dir, since, until, seen) })
+    if scan_claude { scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_session_fast(path, sessions, projects_dir) }) }
     if json_mode { println(build_session_json(sessions, order, since, until).stringify(indent=2)) }
     else {
       println(lpad("Session", 30) + " | " + lpad("Project", 30) + " | " + lpad("Last Activity", 14) + " | " + lpad("Total Tokens", 14) + " | " + lpad("Cost", 12))
@@ -760,7 +939,8 @@ fn main {
     }
   } else if subcmd == "blocks" {
     let buckets : Map[Int, BucketAcc] = Map::new()
-    scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_daily(path, buckets, since, until, seen) })
+    if scan_claude { scan_dir_generic(projects_dir, projects_dir, project_filter, fn(path) { process_file_daily_fast(path, buckets, since, until) }) }
+    if scan_codex { scan_codex_daily(codex_dir, buckets, since, until) }
     if json_mode { println(build_daily_json(buckets, order).stringify(indent=2)) }
     else {
       print_table_header()
