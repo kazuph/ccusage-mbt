@@ -18,15 +18,15 @@ Measured on MacBook Pro (M3 Max, 128GB RAM) with ~9,100 Claude JSONL files (4.7G
 
 | Query | Time | Data Processed |
 |-------|------|----------------|
-| Today (Claude + Codex) | **0.3s** | ~300MB |
-| 7 days (Claude + Codex) | **0.7s** | ~1.9B tokens |
-| 30 days (Claude + Codex) | **4.4s** | ~8.5B tokens |
+| Today (Claude + Codex) | **0.7s** | ~100M tokens |
+| 7 days (Claude + Codex) | **1.5s** | ~1.9B tokens |
+| 30 days (Claude + Codex) | **6.6s** | ~8.5B tokens |
 
-Previously, the 30-day query took **1 minute 42 seconds** with the Node.js implementation (`ccusage`). That's an **~23x speedup**.
+Previously, the 30-day query took **1 minute 42 seconds** with the Node.js implementation (`ccusage`). That's an **~15x speedup**.
 
 ### Binary Size
 
-The compiled native binary is only **460KB**.
+The compiled native binary is only **539KB**.
 
 ## Architecture
 
@@ -174,30 +174,30 @@ ccusage-mbt session --since 20260223
 ```
         Date |        Input |       Output |   Cache Create |     Cache Read |   Total Tokens |         Cost
 -------------+--------------+--------------+----------------+----------------+----------------+--------------
-  2026-02-21 |       19,825 |       10,472 |      3,545,393 |     55,786,897 |     59,362,587 |      $104.34
-  2026-02-22 |       16,879 |       13,992 |      1,968,355 |     50,299,365 |     52,298,591 |      $101.27
-  2026-02-23 |    1,368,905 |      310,997 |      9,830,638 |    323,801,567 |    335,312,107 |      $638.12
+  2026-02-22 |    2,120,874 |      210,082 |      1,968,355 |     66,823,397 |     71,122,708 |       $41.52
+  2026-02-23 |    1,853,298 |      409,358 |     11,198,829 |    367,434,823 |    380,896,308 |      $244.60
+  2026-02-24 |    1,121,872 |      151,360 |      3,234,870 |     95,857,167 |    100,365,269 |       $56.78
 -------------+--------------+--------------+----------------+----------------+----------------+--------------
-       Total |    1,405,609 |      335,461 |     15,344,386 |    429,887,829 |    446,973,285 |      $843.73
+       Total |    5,096,044 |      770,800 |     16,402,054 |    530,115,387 |    552,384,285 |      $342.90
 ```
 
 ### JSON Output
 
 ```bash
-ccusage-mbt daily --json --since 20260223 --until 20260223
+ccusage-mbt daily --json --since 20260224 --until 20260224
 ```
 
 ```json
 {
   "daily": [
     {
-      "date": "2026-02-23",
-      "inputTokens": 1368905,
-      "outputTokens": 310997,
-      "cacheCreationTokens": 9830638,
-      "cacheReadTokens": 323801567,
-      "totalTokens": 335312107,
-      "totalCost": 638.12,
+      "date": "2026-02-24",
+      "inputTokens": 1121873,
+      "outputTokens": 151379,
+      "cacheCreationTokens": 3234981,
+      "cacheReadTokens": 96000364,
+      "totalTokens": 100508597,
+      "totalCost": 56.85,
       "modelsUsed": ["claude-opus-4-6", "claude-haiku-4-5-20251001", "gpt-5.3-codex"],
       "modelBreakdowns": [...]
     }
@@ -210,20 +210,22 @@ ccusage-mbt daily --json --since 20260223 --until 20260223
 
 ### Claude Code (Standard)
 
-| Model | Input | Output | Cache Creation | Cache Read |
-|-------|-------|--------|----------------|------------|
-| claude-opus-4, opus-4-1 | $15.00/M | $75.00/M | $18.75/M | $1.50/M |
-| claude-opus-4-5 | $5.00/M | $25.00/M | $6.25/M | $0.50/M |
-| claude-opus-4-6 | $5.00/M | $25.00/M | $6.25/M | $0.50/M |
-| claude-sonnet-4/4-5/4-6 | $3.00/M | $15.00/M | $3.75/M | $0.30/M |
-| claude-haiku-4-5 | $1.00/M | $5.00/M | $1.25/M | $0.10/M |
+Matched via `contains()` in order — first match wins:
+
+| Model (match pattern) | Input | Output | Cache Creation | Cache Read |
+|----------------------|-------|--------|----------------|------------|
+| `*opus-4-6*` | $5.00/M | $25.00/M | $6.25/M | $0.50/M |
+| `*opus-4-5*` | $5.00/M | $25.00/M | $6.25/M | $0.50/M |
+| `*opus*` (other) | $15.00/M | $75.00/M | $18.75/M | $1.50/M |
+| `*sonnet*` | $3.00/M | $15.00/M | $3.75/M | $0.30/M |
+| `*haiku*` | $1.00/M | $5.00/M | $1.25/M | $0.10/M |
 
 ### Claude Code (Tiered — 200K+ tokens per request)
 
-| Model | Input | Output | Cache Creation | Cache Read |
-|-------|-------|--------|----------------|------------|
-| claude-opus-4-6 | $10.00/M | $37.50/M | $12.50/M | $1.00/M |
-| claude-sonnet-4/4-5/4-6 | $6.00/M | $22.50/M | $7.50/M | $0.60/M |
+| Model (match pattern) | Input | Output | Cache Creation | Cache Read |
+|----------------------|-------|--------|----------------|------------|
+| `*opus-4-6*` | $10.00/M | $37.50/M | $12.50/M | $1.00/M |
+| `*sonnet*` | $6.00/M | $22.50/M | $7.50/M | $0.60/M |
 
 ### Codex (API Equivalent)
 
@@ -242,7 +244,7 @@ See [examples/swiftbar/README.md](examples/swiftbar/README.md) for setup instruc
 ```
 ccusage-mbt/
 ├── cmd/main/
-│   ├── main.mbt          # MoonBit application (964 lines)
+│   ├── main.mbt          # MoonBit application (996 lines)
 │   ├── native_helper.c   # C FFI layer (408 lines)
 │   └── moon.pkg          # Package config
 ├── examples/
@@ -253,7 +255,7 @@ ccusage-mbt/
 └── README.md
 ```
 
-Total: ~1,400 lines of code for a tool that processes 5GB+ of data in under 5 seconds.
+Total: ~1,400 lines of code for a tool that processes 5GB+ of data in under 7 seconds.
 
 ## License
 
