@@ -14,15 +14,25 @@ Claude Code and Codex store API interaction logs as JSONL files locally. Aggrega
 
 ## Benchmarks
 
-Measured on MacBook Pro (M3 Max, 128GB RAM) with ~9,100 Claude JSONL files (4.7GB) and ~300 Codex JSONL files (667MB):
+Measured on MacBook Pro (M3 Max, 128GB RAM) with ~9,100 Claude JSONL files (4.7GB) and ~300 Codex JSONL files (667MB). All times are wall-clock (real) time.
+
+#### Claude Code
 
 | Query | Time | Data Processed |
 |-------|------|----------------|
-| Today (Claude + Codex) | **0.7s** | ~100M tokens |
-| 7 days (Claude + Codex) | **1.5s** | ~1.9B tokens |
-| 30 days (Claude + Codex) | **6.6s** | ~8.5B tokens |
+| Today | **0.7s** | ~100M tokens |
+| 7 days | **1.4s** | ~1.9B tokens |
+| 30 days | **7.8s** | ~8.5B tokens |
 
-Previously, the 30-day query took **1 minute 42 seconds** with the Node.js implementation (`ccusage`). That's an **~15x speedup**.
+#### Codex (tail-read optimization)
+
+| Query | Time |
+|-------|------|
+| 30 days (~300 sessions) | **0.05s** |
+
+Codex sessions use a tail-read strategy (last entry = session total), making them near-instant regardless of period.
+
+Previously, the 30-day query took **1 minute 42 seconds** with the Node.js implementation (`ccusage`). That's a **~13x speedup**.
 
 ### Binary Size
 
