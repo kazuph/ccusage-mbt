@@ -5,27 +5,27 @@ A macOS menu bar plugin that displays your Claude Code and Codex API usage at a 
 ## Screenshot
 
 ```
-🤖$632.91 🔮$3.66          ← Menu bar
+🤖$52.33 🔮$4.52           ← Menu bar
 ───────────────────────────
 🤖 Claude Code (API equivalent)
 ───────────────────────────
-📅 Today: $632.91
-📅 Week:  $2569.39
-📅 30d:   $13725.40
+📅 Today: $52.33
+📅 Week:  $1,040.17
+📅 30d:   $5,012.46
 ───────────────────────────
 📊 Claude Daily Breakdown
-  2026-02-23: $632.91 (325.5M tokens)
-  2026-02-22: $101.27 (52.3M tokens)
+  2026-02-24: $52.33 (117.1M tokens)
+  2026-02-23: $238.88 (380.9M tokens)
   ...
 ───────────────────────────
 🔮 Codex GPT-5.3 (API equivalent)
 ───────────────────────────
-📅 Today: $3.66 (8.9M tokens)
-📅 Week:  $176.73 (530.3M tokens)
-📅 30d:   $437.37 (1.6B tokens)
+📅 Today: $4.52 (14.5M tokens)
+📅 Week:  $15.37 (46.2M tokens)
+📅 30d:   $35.80 (107.5M tokens)
 ───────────────────────────
 📊 Codex Daily Breakdown
-  2026-02-23: $3.66 (8.9M tokens)
+  2026-02-24: $4.52 (14.5M tokens)
   ...
 ```
 
@@ -48,11 +48,9 @@ chmod +x ~/Library/Application\ Support/SwiftBar/Plugins/ccusage.1h.sh
 
 ## How It Works
 
-1. Runs 3 parallel `ccusage-mbt` queries (today / 7 days / 30 days) with `--source all`
+1. Runs 3 parallel `ccusage-mbt` queries (today / 7 days / 30 days)
 2. Pipes JSON output through a single Python formatter
 3. Splits costs by model name: Claude models vs Codex/GPT models
-4. Caches output for 55 minutes to avoid redundant computation
-5. Background refresh when cache expires (stale data shown while refreshing)
 
 ## Menu Actions
 
