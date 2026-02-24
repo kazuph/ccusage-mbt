@@ -1,21 +1,11 @@
 #!/bin/bash
 
 # <xbar.title>Claude Code Usage</xbar.title>
-# <xbar.version>v5.0</xbar.version>
+# <xbar.version>v6.0</xbar.version>
 # <xbar.author>kazuph</xbar.author>
 # <xbar.author.github>kazuph</xbar.author.github>
 # <xbar.desc>Display Claude Code + Codex daily usage (ccusage-mbt unified)</xbar.desc>
 # <xbar.dependencies>ccusage-mbt</xbar.dependencies>
-
-# ============================================================
-# Cache Configuration
-# ============================================================
-CACHE_DIR="$HOME/.cache/swiftbar-ccusage"
-CACHE_FILE="$CACHE_DIR/output.txt"
-LOCK_FILE="$CACHE_DIR/refresh.lock"
-CACHE_MAX_AGE=3300  # 55 minutes (refresh before 1h interval)
-
-mkdir -p "$CACHE_DIR"
 
 # PATH setup
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -23,7 +13,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 # ============================================================
 # Handle menu item clicks (terminal reports)
 # ============================================================
-if [ -n "$1" ] && [ "$1" != "--refresh" ]; then
+if [ -n "$1" ]; then
     case "$1" in
         weekly)
             echo "=== This Week's Claude Code + Codex Usage (API equivalent) ==="
@@ -46,37 +36,8 @@ if [ -n "$1" ] && [ "$1" != "--refresh" ]; then
 fi
 
 # ============================================================
-# Cache Check: show cached data if fresh enough
-# ============================================================
-if [ -f "$CACHE_FILE" ]; then
-    CACHE_MTIME=$(stat -f %m "$CACHE_FILE" 2>/dev/null || echo 0)
-    NOW=$(date +%s)
-    CACHE_AGE=$(( NOW - CACHE_MTIME ))
-
-    if [ "$CACHE_AGE" -lt "$CACHE_MAX_AGE" ]; then
-        cat "$CACHE_FILE"
-        exit 0
-    fi
-
-    # Cache is stale - show it but trigger background refresh
-    cat "$CACHE_FILE"
-
-    if ! [ -f "$LOCK_FILE" ] || [ $(( NOW - $(stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0) )) -gt 300 ]; then
-        touch "$LOCK_FILE"
-        (
-            bash "$0" --refresh &>/dev/null
-            /bin/rm -f "$LOCK_FILE"
-        ) &
-        disown
-    fi
-    exit 0
-fi
-
-# ============================================================
-# No cache or explicit refresh - generate data
-# ============================================================
-
 # Python setup
+# ============================================================
 UV_PYTHON_CMD=()
 if command -v uv >/dev/null 2>&1; then
     UV_PYTHON_CMD=(uv run python3)
@@ -125,18 +86,19 @@ DATA_MONTHLY=$(< "$TMPD/monthly")
 
 /bin/rm -rf "$TMPD"
 
-# Background refresh check
-if [ "$1" = "--refresh" ]; then
-    IS_REFRESH=1
-else
-    IS_REFRESH=0
+# Check if we got valid data
+if [ -z "$DATA_TODAY" ] || [ "$(echo "$DATA_TODAY" | head -c1)" != "{" ]; then
+    echo "🤖 Error"
+    echo "---"
+    echo "❌ Failed to fetch data"
+    echo "🔄 Refresh | refresh=true"
+    exit 0
 fi
 
 # ============================================================
 # Generate Output (single Python call for all formatting)
 # ============================================================
-generate_output() {
-    printf '%s\n---SEP---\n%s\n---SEP---\n%s\n' "$DATA_TODAY" "$DATA_WEEKLY" "$DATA_MONTHLY" | run_uv_python -c "
+printf '%s\n---SEP---\n%s\n---SEP---\n%s\n' "$DATA_TODAY" "$DATA_WEEKLY" "$DATA_MONTHLY" | run_uv_python -c "
 import json, sys
 
 def split_costs(data):
@@ -221,37 +183,7 @@ import datetime
 print('---')
 print(f'⏰ Updated: {datetime.datetime.now().strftime(\"%H:%M\")} | color=gray')
 " 2>/dev/null
-    echo "📊 Weekly Report | bash='$0' param1=weekly terminal=true"
-    echo "📊 Monthly Report | bash='$0' param1=monthly terminal=true"
-    echo "📊 Session Report | bash='$0' param1=session terminal=true"
-    echo "🔄 Refresh | refresh=true"
-}
-
-# Check if we got valid data
-if [ -z "$DATA_TODAY" ] || [ "$(echo "$DATA_TODAY" | head -c1)" != "{" ]; then
-    if [ "$IS_REFRESH" -eq 1 ]; then
-        exit 1
-    fi
-    echo "🤖 Loading..."
-    echo "---"
-    echo "⏳ Fetching data..."
-    echo "🔄 Refresh | refresh=true"
-
-    touch "$LOCK_FILE"
-    (
-        bash "$0" --refresh &>/dev/null
-        /bin/rm -f "$LOCK_FILE"
-    ) &
-    disown
-    exit 0
-fi
-
-# Generate and save output
-OUTPUT=$(generate_output)
-
-if [ "$IS_REFRESH" -eq 1 ]; then
-    echo "$OUTPUT" > "$CACHE_FILE"
-else
-    echo "$OUTPUT"
-    echo "$OUTPUT" > "$CACHE_FILE"
-fi
+echo "📊 Weekly Report | bash='$0' param1=weekly terminal=true"
+echo "📊 Monthly Report | bash='$0' param1=monthly terminal=true"
+echo "📊 Session Report | bash='$0' param1=session terminal=true"
+echo "🔄 Refresh | refresh=true"
